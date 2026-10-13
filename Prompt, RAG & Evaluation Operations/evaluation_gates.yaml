@@ -1,0 +1,191 @@
+# evaluation_gates.yaml
+# Great Lakes Health System — Clinical Knowledge Assistant
+# LC 2 Project Module Resource: Evaluation Gate Configuration Example
+#
+# Mirrors the Microsoft Foundry Azure AI Evaluation SDK "testing_criteria" pattern
+# (azure-ai-evaluation / Foundry evaluate() API, 2026). Builtin evaluator names below
+# match the SDK's builtin.* evaluator_name convention. LLM-judged evaluators
+# (groundedness, relevance, coherence, fluency, retrieval) return a 1-5 scale;
+# thresholds here are expressed on that native 1-5 scale, not normalized to 0-1.
+#
+# gate_thresholds_ref values below correspond 1:1 to the "gate_thresholds_ref" column
+# in GreatLakes_ExperimentManifest.xlsx and experiment_manifest_skeleton.json.
+
+schema_version: "1.0"
+judge_model_deployment: "gpt-4o"          # non-preview model recommended for parseable scoring
+score_scale: "1-5 (native Foundry LLM-judge scale); safety evaluators return pass/fail + severity"
+
+# ---------------------------------------------------------------------------
+# GATE: Critical tier — drug-interaction checks
+# No live production exposure without pharmacist SME sign-off, per PromptOps policy.
+# ---------------------------------------------------------------------------
+gates:
+  - gate_id: "GATE-CRITICAL-v1"
+    applies_to_use_cases: ["drug_interaction_check"]
+    risk_tier: "Critical"
+    testing_criteria:
+      - type: azure_ai_evaluator
+        name: groundedness
+        evaluator_name: builtin.groundedness
+        initialization_parameters: { deployment_name: "{{judge_model_deployment}}" }
+        data_mapping: { context: "{{item.context}}", response: "{{item.response}}" }
+        threshold: 4.6            # scaled from policy target 0.92 on a 1-5 evaluator (>= 4.6/5)
+        action_on_fail: block_promotion
+
+      - type: azure_ai_evaluator
+        name: relevance
+        evaluator_name: builtin.relevance
+        initialization_parameters: { deployment_name: "{{judge_model_deployment}}" }
+        data_mapping: { query: "{{item.query}}", response: "{{item.response}}" }
+        threshold: 4.3
+        action_on_fail: block_promotion
+
+      - type: azure_ai_evaluator
+        name: retrieval
+        evaluator_name: builtin.retrieval
+        initialization_parameters: { deployment_name: "{{judge_model_deployment}}" }
+        data_mapping: { query: "{{item.query}}", context: "{{item.context}}" }
+        threshold: 4.2
+        action_on_fail: block_promotion
+
+      - type: azure_ai_evaluator
+        name: content_safety
+        evaluator_name: builtin.content_safety     # combines hate/unfairness, violence, self-harm, sexual
+        initialization_parameters: { azure_ai_project: "{{project_ref}}" }
+        data_mapping: { query: "{{item.query}}", response: "{{item.response}}" }
+        action_on_fail: block_promotion            # any flagged severity blocks, no threshold tuning
+
+      - type: custom_evaluator
+        name: drug_interaction_accuracy
+        description: >
+          Domain-specific evaluator against a pharmacy-SME-curated test set of known
+          interaction pairs and known negatives. Built-in evaluators do not verify
+          pharmacological correctness, only grounding/relevance to retrieved context.
+        test_set_ref: "pharmacy_sme_validated_v3"
+        pass_condition: "zero missed known-interaction flags AND zero fabricated interactions"
+        action_on_fail: block_promotion
+
+    human_in_the_loop:
+      trigger_conditions:
+        - "any content_safety flag, any severity"
+        - "drug_interaction_accuracy custom evaluator fails on any test case"
+        - "groundedness score below 4.6 on any single response in the run"
+        - "novel drug entity not present in prior 90 days of evaluation sets"
+      reviewer_role: "Pharmacy SME (Clinical Safety Officer for escalations)"
+      sla_hours: 4
+      on_trigger: "pause promotion; route to reviewer queue; notify via [PLACEHOLDER: paging system]"
+
+    rollback:
+      incident_triggers:
+        - "production groundedness drift below 4.6 sustained over 2 consecutive monitoring windows"
+        - "clinician-reported drug-interaction error"
+      rollback_owner: "GenAIOps on-call engineer, with Clinical Safety Officer notification"
+      rollback_sla_minutes: 30
+      post_incident_review_days: 5
+
+# ---------------------------------------------------------------------------
+# GATE: Medium-High tier — protocol lookup, patient education
+# ---------------------------------------------------------------------------
+  - gate_id: "GATE-MEDHIGH-v1"
+    applies_to_use_cases: ["protocol_lookup", "patient_education"]
+    risk_tier: "Medium-High"
+    testing_criteria:
+      - type: azure_ai_evaluator
+        name: groundedness
+        evaluator_name: builtin.groundedness
+        initialization_parameters: { deployment_name: "{{judge_model_deployment}}" }
+        data_mapping: { context: "{{item.context}}", response: "{{item.response}}" }
+        threshold: 4.25           # scaled from policy target 0.85
+        action_on_fail: hold_for_review
+
+      - type: azure_ai_evaluator
+        name: relevance
+        evaluator_name: builtin.relevance
+        initialization_parameters: { deployment_name: "{{judge_model_deployment}}" }
+        data_mapping: { query: "{{item.query}}", response: "{{item.response}}" }
+        threshold: 4.0
+        action_on_fail: hold_for_review
+
+      - type: azure_ai_evaluator
+        name: coherence
+        evaluator_name: builtin.coherence
+        initialization_parameters: { deployment_name: "{{judge_model_deployment}}" }
+        data_mapping: { query: "{{item.query}}", response: "{{item.response}}" }
+        threshold: 3.8
+        action_on_fail: hold_for_review
+
+      - type: azure_ai_evaluator
+        name: response_completeness
+        evaluator_name: builtin.response_completeness   # preview evaluator
+        initialization_parameters: { deployment_name: "{{judge_model_deployment}}" }
+        data_mapping: { response: "{{item.response}}", ground_truth: "{{item.ground_truth}}" }
+        threshold: 3.8
+        action_on_fail: hold_for_review
+
+    human_in_the_loop:
+      trigger_conditions:
+        - "any evaluator below threshold"
+        - "groundedness negative drift > 0.3 vs. prior 30-day production baseline"
+      reviewer_role: "Clinical SME (specialty-matched for protocol; Health Literacy reviewer for patient education)"
+      sla_hours: 24
+      on_trigger: "hold in silent/shadow mode; route to reviewer queue"
+
+    rollback:
+      incident_triggers:
+        - "production groundedness drift below 4.25 sustained over 3 consecutive monitoring windows"
+        - "clinician-reported inaccurate protocol guidance"
+      rollback_owner: "GenAIOps on-call engineer"
+      rollback_sla_minutes: 120
+      post_incident_review_days: 5
+
+# ---------------------------------------------------------------------------
+# GATE: Low tier — administrative guidance
+# ---------------------------------------------------------------------------
+  - gate_id: "GATE-LOW-v1"
+    applies_to_use_cases: ["administrative_guidance"]
+    risk_tier: "Low"
+    testing_criteria:
+      - type: azure_ai_evaluator
+        name: relevance
+        evaluator_name: builtin.relevance
+        initialization_parameters: { deployment_name: "{{judge_model_deployment}}" }
+        data_mapping: { query: "{{item.query}}", response: "{{item.response}}" }
+        threshold: 3.6
+        action_on_fail: block_promotion
+
+      - type: azure_ai_evaluator
+        name: fluency
+        evaluator_name: builtin.fluency
+        initialization_parameters: { deployment_name: "{{judge_model_deployment}}" }
+        data_mapping: { response: "{{item.response}}" }
+        threshold: 3.6
+        action_on_fail: block_promotion
+
+    human_in_the_loop:
+      trigger_conditions:
+        - "sustained gate failure across 3+ consecutive runs (systemic issue, not spot-check)"
+      reviewer_role: "Departmental owner (spot-check only)"
+      sla_hours: 48
+      on_trigger: "log for weekly spot-check; automated gate alone can promote/block"
+
+    rollback:
+      incident_triggers:
+        - "user-reported factual error, repeated pattern (3+ reports/week)"
+      rollback_owner: "GenAIOps on-call engineer"
+      rollback_sla_minutes: 480
+      post_incident_review_days: 10
+
+# ---------------------------------------------------------------------------
+# Notes for graders / implementers
+# ---------------------------------------------------------------------------
+notes: >
+  1. Threshold values are illustrative for coursework; a real deployment sets them from a
+     pharmacy/clinical-SME-reviewed validation study, not from this template.
+  2. builtin.content_safety wraps HateUnfairnessEvaluator, ViolenceEvaluator, SelfHarmEvaluator,
+     and SexualEvaluator; these require an azure_ai_project reference rather than a judge-model
+     deployment, per the Azure AI Evaluation SDK auth pattern.
+  3. response_completeness is a preview evaluator as of 2026 Foundry documentation; treat its
+     threshold as provisional and re-validate when it exits preview.
+  4. drug_interaction_accuracy is a custom evaluator (not a Foundry builtin) because built-in
+     groundedness/relevance evaluators check grounding to retrieved context, not pharmacological
+     correctness — the two are not substitutes for each other.

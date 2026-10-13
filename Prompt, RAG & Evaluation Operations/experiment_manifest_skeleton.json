@@ -1,0 +1,54 @@
+{
+  "$schema_note": "Experiment manifest skeleton. One JSON object per experiment. Field names mirror the 'Experiment Log' tab in GreatLakes_ExperimentManifest.xlsx so both formats stay in sync.",
+  "experiment_id": "EXP-0000",
+  "use_case": "protocol_lookup | drug_interaction_check | patient_education | administrative_guidance",
+  "clinical_risk_tier": "Critical | Medium-High | Low",
+  "prompt": {
+    "prompt_id": "PMT-XXX-000",
+    "semantic_version": "0.0.0",
+    "author": "",
+    "timestamp": "2026-01-01T00:00:00Z",
+    "change_summary": ""
+  },
+  "rag_config": {
+    "chunking_strategy": "fixed-size | semantic",
+    "overlap_ratio_pct": 0,
+    "context_window_tokens": 0,
+    "embedding_model": "modelA-v1 | modelB-v2",
+    "embedding_version": "0.0",
+    "index_variant": "per-domain | unified",
+    "index_version": "0",
+    "retrieval": {
+      "top_k": 0,
+      "hybrid_dense_bm25": true,
+      "reranker_threshold": 0.0,
+      "candidate_pool_size": 0
+    }
+  },
+  "reproducibility": {
+    "dataset_snapshot_id": "",
+    "random_seed": 0,
+    "evaluator_model_version": "e.g. gpt-4o-2026-xx"
+  },
+  "evaluation": {
+    "evaluator_set": ["groundedness", "relevance", "retrieval", "coherence", "fluency"],
+    "gate_thresholds_ref": "GATE-CRITICAL-v1 | GATE-MEDHIGH-v1 | GATE-LOW-v1",
+    "automated_gate_result": "pending | pass | fail",
+    "human_in_the_loop_triggered": false,
+    "sme_approver_id": "",
+    "sme_decision": "pending | approved | rejected | escalated",
+    "sme_decision_timestamp": ""
+  },
+  "audit": {
+    "audit_token": "",
+    "change_control_ticket": "",
+    "retention_policy": "e.g. 7-year audit retention per compliance policy"
+  },
+  "lifecycle": {
+    "status": "proposed | in_evaluation | gate_passed | gate_failed | sme_review | promoted | rolled_back",
+    "proposed_date": "",
+    "promoted_date": "",
+    "rollback_flag": false,
+    "rollback_reason": ""
+  }
+}
